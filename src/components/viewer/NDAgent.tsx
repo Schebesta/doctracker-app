@@ -1,10 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import SignatureCanvas from 'react-signature-canvas'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Shield, CheckSquare, Square } from 'lucide-react'
+import { Shield, CheckSquare, Square, RotateCcw } from 'lucide-react'
 
 interface NDAGateProps {
   ndaText: string
@@ -14,6 +15,13 @@ interface NDAGateProps {
 export function NDAGate({ ndaText, onAgree }: NDAGateProps) {
   const [agreed, setAgreed] = useState(false)
   const [name, setName] = useState('')
+  const sigCanvas = useRef<SignatureCanvas>(null)
+  const [isEmpty, setIsEmpty] = useState(true)
+
+  const handleClear = () => {
+    sigCanvas.current?.clear()
+    setIsEmpty(true)
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -43,6 +51,35 @@ export function NDAGate({ ndaText, onAgree }: NDAGateProps) {
             />
           </div>
 
+          <div className="space-y-1.5">
+            <Label>Signature</Label>
+            <div className="border-2 border-dashed border-gray-200 rounded-xl overflow-hidden relative bg-gray-50">
+              <SignatureCanvas
+                ref={sigCanvas}
+                canvasProps={{
+                  width: 440,
+                  height: 160,
+                  className: 'w-full h-40',
+                  style: { touchAction: 'none' },
+                }}
+                backgroundColor="rgb(249,250,251)"
+                onBegin={() => setIsEmpty(false)}
+              />
+              {isEmpty && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <p className="text-sm text-gray-400">Draw your signature here</p>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={handleClear}
+              className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 mt-2 transition-colors"
+            >
+              <RotateCcw className="w-3 h-3" />
+              Clear
+            </button>
+          </div>
+
           <button
             onClick={() => setAgreed(!agreed)}
             className="flex items-start gap-2.5 text-left w-full"
@@ -59,7 +96,7 @@ export function NDAGate({ ndaText, onAgree }: NDAGateProps) {
 
           <Button
             className="w-full bg-blue-600 hover:bg-blue-700"
-            disabled={!agreed || !name.trim()}
+            disabled={!agreed || !name.trim() || isEmpty}
             onClick={() => onAgree(name.trim())}
           >
             I Agree — Continue to Document

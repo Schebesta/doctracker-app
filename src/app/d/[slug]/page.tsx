@@ -1,70 +1,80 @@
 import { ViewerClient } from './viewer-client'
+import { createClient } from '@supabase/supabase-js'
+import { redirect } from 'next/navigation'
 
 interface PageProps {
   params: Promise<{ slug: string }>
 }
 
-// Mock link configs for demo
-function getLinkConfig(slug: string) {
-  const configs: Record<string, {
-    slug: string
-    require_email: boolean
-    allow_download: boolean
-    notify_on_view: boolean
-    nda_enabled: boolean
-    nda_text: string | null
-    watermark_enabled: boolean
-    cta_url: string | null
-    cta_label: string | null
-    document_name: string
-    passcode: string | null
-  }> = {
-    abc123: {
-      slug: 'abc123',
-      require_email: true,
-      allow_download: false,
-      notify_on_view: true,
-      nda_enabled: false,
-      nda_text: null,
-      watermark_enabled: true,
-      cta_url: 'https://calendly.com/example',
-      cta_label: 'Book a Meeting',
-      document_name: 'Series A Pitch Deck',
-      passcode: null,
-    },
-    def456: {
-      slug: 'def456',
-      require_email: false,
-      allow_download: true,
-      notify_on_view: false,
-      nda_enabled: true,
-      nda_text: 'This document contains confidential and proprietary information. By accessing this document, you agree to maintain its confidentiality and not disclose any information to third parties without prior written consent.',
-      watermark_enabled: false,
-      cta_url: null,
-      cta_label: null,
-      document_name: 'Series A Pitch Deck — Confidential',
-      passcode: 'secret123',
-    },
-  }
-
-  return configs[slug] || {
-    slug,
-    require_email: true,
-    allow_download: false,
-    notify_on_view: false,
-    nda_enabled: false,
-    nda_text: null,
-    watermark_enabled: true,
-    cta_url: null,
-    cta_label: null,
-    document_name: 'Shared Document',
-    passcode: null,
-  }
-}
-
 export default async function DocumentViewerPage({ params }: PageProps) {
   const { slug } = await params
-  const config = getLinkConfig(slug)
+  
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+  const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+  // Fetch the specific link configuration AND the joined document data
+  const { data: linkData } = await supabase
+    .from('links')
+    .select('*, documents(*)')
+    .eq('slug', slug)
+    .single()
+
+  if (!linkData || !linkData.documents) {
+    return <div className="min-h-screen flex items-center justify-center text-gray-500">Link not found or expired</div>
+  }
+
+  const document = linkData.documents
+
+  // Check expiration and fallback to newest link
+  if (linkData.set_expiration && linkData.expires_at && new Date() > new Date(linkData.expires_at)) {
+    // Look for a newer valid link for the same document
+    const { data: newerLinks } = await supabase
+      .from('links')
+      .select('*')
+      .eq('document_id', document.id)
+      .order('created_at', { ascending: false })
+
+    const newestValid = newerLinks?.find(l => 
+      !l.set_expiration || !l.expires_at || new Date() < new Date(l.expires_at)
+    )
+
+    if (newestValid && newestValid.slug !== slug) {
+      redirect(`/d/${newestValid.slug}`)
+    } else {
+      return <div className="min-h-screen flex items-center justify-center text-gray-500">This link has expired and no updated link is available.</div>
+    }
+  }
+
+  // Get user settings to see if OAuth is enabled
+  const { data: settings } = await supabase
+    .from('user_settings')
+    .select('oauth_enabled')
+    .eq('id', document.owner_id)
+    .single()
+
+  const oauthEnabled = settings?.oauth_enabled || false
+
+  // Get public URL for the PDF
+  const { data: publicUrlData } = supabase.storage
+    .from('documents')
+    .getPublicUrl(document.storage_path)
+
+  const config = {
+    slug,
+    require_email: linkData.require_email,
+    allow_download: linkData.allow_download,
+    notify_on_view: linkData.notify_on_view,
+    nda_enabled: linkData.nda_enabled,
+    nda_text: linkData.nda_text,
+    watermark_enabled: linkData.watermark_enabled,
+    cta_url: document.cta_url,
+    cta_label: document.cta_label,
+    document_name: document.name,
+    passcode: linkData.password_protect ? linkData.passcode : null,
+    pdf_url: publicUrlData.publicUrl,
+    oauth_enabled: oauthEnabled
+  }
 
   return <ViewerClient config={config} />
 }

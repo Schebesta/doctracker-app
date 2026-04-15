@@ -9,15 +9,17 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { Link2, Copy, Check, ExternalLink } from 'lucide-react'
 import { generateSlug } from '@/lib/utils'
+import { supabase } from '@/lib/supabase'
 
 interface CreateLinkModalProps {
   open: boolean
   onClose: () => void
   documentName: string
   documentId: string
+  onSuccess?: (slug: string) => void
 }
 
-export function CreateLinkModal({ open, onClose, documentName, documentId }: CreateLinkModalProps) {
+export function CreateLinkModal({ open, onClose, documentName, documentId, onSuccess }: CreateLinkModalProps) {
   const [requireEmail, setRequireEmail] = useState(true)
   const [passwordProtect, setPasswordProtect] = useState(false)
   const [password, setPassword] = useState('')
@@ -35,11 +37,35 @@ export function CreateLinkModal({ open, onClose, documentName, documentId }: Cre
 
   const handleCreate = async () => {
     setCreating(true)
-    await new Promise(r => setTimeout(r, 600))
-    const slug = generateSlug()
-    const url = `${typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'}/d/${slug}`
-    setCreatedLink(url)
-    setCreating(false)
+    try {
+      const slug = generateSlug()
+      
+      const { error } = await supabase.from('links').insert({
+        slug,
+        document_id: documentId,
+        require_email: requireEmail,
+        password_protect: passwordProtect,
+        passcode: passwordProtect ? password : null,
+        set_expiration: setExpiration,
+        expires_at: setExpiration && expiresAt ? new Date(expiresAt).toISOString() : null,
+        allow_download: allowDownload,
+        notify_on_view: notifyOnView,
+        notify_email: notifyOnView ? notifyEmail : null,
+        nda_enabled: ndaEnabled,
+        nda_text: ndaEnabled ? ndaText : null,
+        watermark_enabled: watermarkEnabled
+      })
+      
+      if (error) throw error
+
+      const url = `${typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'}/d/${slug}`
+      setCreatedLink(url)
+      if (onSuccess) onSuccess(slug)
+    } catch (err: any) {
+      alert("Error creating link: " + err.message)
+    } finally {
+      setCreating(false)
+    }
   }
 
   const handleCopy = async () => {

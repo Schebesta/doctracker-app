@@ -1,6 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
 import { Navbar } from '@/components/ui/navbar'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -22,30 +24,160 @@ import {
   Clock,
   Files,
   Activity,
+  Download,
   MoreHorizontal,
+  Copy,
+  Check,
+  Edit2
 } from 'lucide-react'
 
 type DocumentType = typeof mockDocuments[0]
 
 export default function DashboardPage() {
-  const [documents, setDocuments] = useState<DocumentType[]>(mockDocuments)
+  const [copiedLink, setCopiedLink] = useState<string | null>(null)
+  
+  const handleCopyLink = async (slug: string) => {
+    const url = `${window.location.origin}/d/${slug}`
+    await navigator.clipboard.writeText(url)
+    setCopiedLink(slug)
+    setTimeout(() => setCopiedLink(null), 2000)
+  }
+  const router = useRouter()
+  const [user, setUser] = useState<any>(null)
+  const [loadingSession, setLoadingSession] = useState(true)
+
+  useEffect(() => {
+    const fetchDocs = async (userId: string) => {
+      // 1. Fetch Docs
+      const { data: docsData } = await supabase.from('documents').select('*').eq('owner_id', userId).order('created_at', { ascending: false })
+      if (!docsData) return
+
+      // 2. Fetch Links
+      const docIds = docsData.map((d: any) => d.id)
+      const { data: linksData } = await supabase.from('links').select('slug, document_id').in('document_id', docIds)
+      const slugs = linksData?.map((l: any) => l.slug) || []
+      
+      // 3. Fetch Telemetry
+      const { data: telemetryData } = slugs.length > 0 ? 
+        await supabase.from('telemetry').select('*').in('link_slug', slugs) : { data: [] }
+
+      // Map telemetry to documents
+      const docStats: Record<string, { views: number, timeSum: number, viewEvents: number, pagesSet: Set<string> }> = {}
+      docsData.forEach((d: any) => docStats[d.id] = { views: 0, timeSum: 0, viewEvents: 0, pagesSet: new Set() })
+
+      let recentViews = 0
+      let totalTimeSum = 0
+      let totalTimeEvents = 0
+      let oldTimeSum = 0
+      let oldTimeEvents = 0
+
+      const now = new Date()
+      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+
+      telemetryData?.forEach((t: any) => {
+        const link = linksData?.find((l: any) => l.slug === t.link_slug)
+        if (!link) return
+        const docId = link.document_id
+        
+        const tDate = new Date(t.created_at)
+
+        if (t.event_type === 'open') {
+          docStats[docId].views += 1
+          if (tDate > oneDayAgo) recentViews += 1
+        } else if (t.event_type === 'page_view' && t.duration_seconds) {
+          docStats[docId].timeSum += t.duration_seconds
+          docStats[docId].viewEvents += 1
+          if (t.page_number) docStats[docId].pagesSet.add(`${t.viewer_email}-${t.page_number}`)
+          
+          if (tDate > oneWeekAgo) {
+            totalTimeSum += t.duration_seconds
+            totalTimeEvents += 1
+          } else {
+            oldTimeSum += t.duration_seconds
+            oldTimeEvents += 1
+          }
+        }
+      })
+
+      let recentDocs = 0
+      docsData.forEach((d: any) => {
+        if (new Date(d.created_at) > oneWeekAgo) recentDocs += 1
+      })
+
+      const currentAvg = totalTimeEvents > 0 ? Math.round(totalTimeSum / totalTimeEvents) : 0
+      const oldAvg = oldTimeEvents > 0 ? Math.round(oldTimeSum / oldTimeEvents) : 0
+      const diff = currentAvg - oldAvg
+      const timeChangeStr = diff >= 0 ? `+${diff}s vs last week` : `${diff}s vs last week`
+
+      setDashboardStats({
+        docChange: `+${recentDocs} this week`,
+        viewsChange: `+${recentViews} today`,
+        timeChange: timeChangeStr
+      })
+
+      setDocuments(docsData.map((d: any) => {
+        const stats = docStats[d.id]
+        return {
+          ...d,
+          totalViews: stats.views,
+          avgTimeSpent: stats.viewEvents > 0 ? Math.round(stats.timeSum / stats.viewEvents) : 0,
+          pagesViewed: stats.pagesSet.size,
+          links: d.links || []
+        }
+      }))
+    }
+
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) {
+        // Automatically sign in as anonymous guest
+        const { data, error } = await supabase.auth.signInAnonymously()
+        if (!error && data.user) {
+          setUser(data.user)
+          fetchDocs(data.user.id)
+        }
+      } else {
+        setUser(session.user)
+        fetchDocs(session.user.id)
+      }
+      setLoadingSession(false)
+    })
+    
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      setUser(session?.user || null)
+      if (session?.user) fetchDocs(session.user.id)
+      else setDocuments([])
+    })
+    
+    return () => authListener.subscription.unsubscribe()
+  }, [])
+
+  // removed blocking loading state
+
+  const [documents, setDocuments] = useState<any[]>([])
+  const [dashboardStats, setDashboardStats] = useState({
+    docChange: '',
+    viewsChange: '',
+    timeChange: ''
+  })
   const [uploadOpen, setUploadOpen] = useState(false)
   const [analyticsDoc, setAnalyticsDoc] = useState<DocumentType | null>(null)
   const [linkDoc, setLinkDoc] = useState<DocumentType | null>(null)
+  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null)
 
   const totalViews = documents.reduce((sum, d) => sum + d.totalViews, 0)
   const totalLinks = documents.reduce((sum, d) => sum + d.links.length, 0)
   const avgTime = Math.round(documents.reduce((sum, d) => sum + d.avgTimeSpent, 0) / documents.length)
   const activeLinks = totalLinks
 
-  const stats = [
+    const stats = [
     {
       label: 'Total Documents',
       value: documents.length,
       icon: Files,
       color: 'text-blue-600',
       bg: 'bg-blue-50',
-      change: '+2 this week',
+      change: dashboardStats.docChange,
     },
     {
       label: 'Total Views',
@@ -53,7 +185,7 @@ export default function DashboardPage() {
       icon: Eye,
       color: 'text-purple-600',
       bg: 'bg-purple-50',
-      change: '+18 today',
+      change: dashboardStats.viewsChange,
     },
     {
       label: 'Active Links',
@@ -65,26 +197,20 @@ export default function DashboardPage() {
     },
     {
       label: 'Avg. Time Spent',
-      value: formatDuration(avgTime),
+      value: formatDuration(avgTime || 0),
       icon: Clock,
       color: 'text-orange-600',
       bg: 'bg-orange-50',
-      change: '+12s vs last week',
+      change: dashboardStats.timeChange,
     },
   ]
 
-  const handleUploadSuccess = (doc: { id: string; name: string; type: 'pdf' | 'video' }) => {
-    const newDoc: DocumentType = {
+  const handleUploadSuccess = (doc: any) => {
+    const newDoc = {
       ...doc,
-      storage_path: '',
-      owner_id: 'user1',
-      space_id: null,
-      cta_url: null,
-      cta_label: null,
-      created_at: new Date().toISOString(),
-      totalViews: 0,
-      avgTimeSpent: 0,
-      links: [],
+      totalViews: doc.total_views || 0,
+      avgTimeSpent: doc.avg_time_spent || 0,
+      links: doc.links || []
     }
     setDocuments(prev => [newDoc, ...prev])
   }
@@ -152,6 +278,9 @@ export default function DashboardPage() {
                     Avg. Time
                   </th>
                   <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">
+                    Pages Viewed
+                  </th>
+                  <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">
                     Links
                   </th>
                   <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">
@@ -210,9 +339,64 @@ export default function DashboardPage() {
                       </div>
                     </td>
                     <td className="px-4 py-4">
-                      <span className="text-sm text-gray-700">
-                        {doc.links.length} {doc.links.length === 1 ? 'link' : 'links'}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5 text-gray-400" />
+                        <span className="text-sm text-gray-700">
+                          {doc.pagesViewed || 0}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-4">
+                      <div className="flex flex-col gap-2 items-start">
+                        {doc.links.length > 0 ? (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-xs gap-1.5 text-gray-600 hover:text-green-600 hover:bg-green-50 w-max -ml-2"
+                              onClick={() => setLinkDoc(doc)}
+                            >
+                              <Link2 className="w-3 h-3" />
+                              Create Link
+                            </Button>
+                            <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-md py-1.5 px-2 w-max">
+                              <button 
+                                onClick={() => handleCopyLink(doc.links[0])}
+                                className="text-xs font-mono text-gray-600 hover:text-blue-600 transition-colors text-left"
+                                title="Copy full link"
+                              >
+                                /d/{doc.links[0].substring(0, 8)}
+                              </button>
+                              <div className="flex items-center gap-1 border-l pl-2">
+                                <button
+                                  onClick={() => handleCopyLink(doc.links[0])}
+                                  className="text-gray-400 hover:text-blue-600 transition-colors"
+                                  title="Copy Link"
+                                >
+                                  {copiedLink === doc.links[0] ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  onClick={() => setLinkDoc(doc)}
+                                  className="text-gray-400 hover:text-orange-600 transition-colors"
+                                  title="Edit Link Settings"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2.5 text-xs gap-1.5 text-gray-600 hover:text-green-600 hover:bg-green-50 w-max"
+                            onClick={() => setLinkDoc(doc)}
+                          >
+                            <Link2 className="w-3.5 h-3.5" />
+                            Create Link
+                          </Button>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-4">
                       <span className="text-sm text-gray-500">
@@ -230,30 +414,31 @@ export default function DashboardPage() {
                           <BarChart2 className="w-3.5 h-3.5" />
                           Analytics
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2.5 text-xs gap-1.5 text-gray-600 hover:text-green-600 hover:bg-green-50"
-                          onClick={() => setLinkDoc(doc)}
-                        >
-                          <Link2 className="w-3.5 h-3.5" />
-                          Link
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2.5 text-xs gap-1.5 text-gray-600 hover:text-orange-600 hover:bg-orange-50"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          Update
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-gray-400 hover:text-gray-600"
-                        >
-                          <MoreHorizontal className="w-4 h-4" />
-                        </Button>
+                        
+
+                        <div className="relative">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-gray-400 hover:text-gray-600"
+                            onClick={() => setOpenDropdownId(openDropdownId === doc.id ? null : doc.id)}
+                          >
+                            <MoreHorizontal className="w-4 h-4" />
+                          </Button>
+                          {openDropdownId === doc.id && (
+                            <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-md shadow-lg border border-gray-100 z-50 py-1">
+                              <button
+                                className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                onClick={() => {
+                                  setOpenDropdownId(null)
+                                }}
+                              >
+                                <Download className="w-4 h-4 text-gray-500" />
+                                Download
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </td>
                   </tr>
@@ -293,6 +478,7 @@ export default function DashboardPage() {
           documentName={analyticsDoc.name}
           totalViews={analyticsDoc.totalViews}
           avgTimeSpent={analyticsDoc.avgTimeSpent}
+          documentId={analyticsDoc.id}
         />
       )}
 
@@ -302,6 +488,14 @@ export default function DashboardPage() {
           onClose={() => setLinkDoc(null)}
           documentName={linkDoc.name}
           documentId={linkDoc.id}
+          onSuccess={async (slug) => {
+            const currentLinks = linkDoc.links || []
+            const newLinks = [slug, ...currentLinks]
+            setDocuments(prev => prev.map(d => 
+              d.id === linkDoc.id ? { ...d, links: newLinks } : d
+            ))
+            await supabase.from('documents').update({ links: newLinks }).eq('id', linkDoc.id)
+          }}
         />
       )}
     </div>

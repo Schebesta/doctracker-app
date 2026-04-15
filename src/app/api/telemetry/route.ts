@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,15 +13,18 @@ export async function POST(request: NextRequest) {
       duration_seconds,
     } = body
 
-    // In production this would write to Supabase
-    console.log('[Telemetry]', {
-      link_id,
-      viewer_email,
-      viewer_name,
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+    const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+    // Fire and forget
+    await supabase.from('telemetry').insert({
+      link_slug: link_id,
+      viewer_email: viewer_email || 'anonymous',
+      viewer_name: viewer_name || 'Anonymous Viewer',
       event_type,
       page_number,
-      duration_seconds,
-      timestamp: new Date().toISOString(),
+      duration_seconds: duration_seconds || 0
     })
 
     return NextResponse.json({ success: true })
