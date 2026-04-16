@@ -1,0 +1,58 @@
+Product Requirements Document: eSignature Workflow Integration
+1. Objective
+Transform doctracker-app from a pure document tracking and sharing utility into a comprehensive eSignature platform. The goal is to allow users to securely send documents for legally binding signatures while retaining our core analytics, link gating, and viewer tracking capabilities.
+2. Background & Context
+Currently, the doctracker-app allows users to upload documents (PDFs, Videos), generate trackable links, and optionally require viewers to accept an NDA using a basic signature canvas. To compete with DocSend and DocuSign, we need a formalized eSignature workflow that provides multi-party signing, verifiable signature certificates, document locking (flattening), and audit trails.
+3. User Workflows
+3.1. Sender Experience (Document Preparation)
+Initiation: A new "eSign" button will be added to the dashboard. Specifically, it will be added as a new column in the DocTracker system's document list.
+Preparation UI Layout: The sender is presented with a full-screen document viewer featuring a persistent Right Sidebar dedicated to eSignature field management.
+Manage Signers: From the sidebar's "INSERT FIELDS FOR" dropdown, senders can access a "Manage Signers" modal. Here, they can add up to 10 signers, specify their names (e.g., Signer 1, Signer 2), and remove them via a trash can icon. The system automatically assigns a distinct pastel color code (e.g., light blue, light green) to each signer.
+Field Placement (Drag and Drop): The sidebar categorizes draggable elements:
+Fillable Fields: "Signature", "Initials", "Name" (features a small person icon), and "Text field".
+Auto-filled Fields: "Date signed" (features a small calendar icon).
+The sender selects an active signer, then drags fields onto the canvas. The placed boxes visually match the assigned signer's designated color scheme (e.g., all of Signer 1's boxes are blue; Signer 2's are green).
+Canvas Interactions (Adjust & Reassign):
+Once dropped on the document, field boxes are fully adjustable (users can resize them via blue corner handles and drag them to precise locations).
+Clicking a placed box opens a context menu allowing the sender to:
+Reassign: Change the assigned signer via an "Assigned To" dropdown.
+Close Panel: Close the eSignature field settings panel.
+Delete: Remove the field completely (via a trash can icon).
+Link Generation & Sending: Once all necessary fields are placed, the sender clicks a prominent "Request signature" button at the bottom of the right sidebar to dispatch secure email links.
+3.2. Signer Experience
+Authentication: To ensure legal validity, signers accessing the link must verify their identity (via email verification code or OAuth) before viewing the document.
+Review & Sign:
+The signer views the document using the existing PDFViewer.
+The UI highlights the fields assigned to them.
+When clicking a signature field, the signer uses a modal (similar to our current SignatureModal) to draw or type their signature.
+After filling all required fields, the signer clicks a binding "Submit Signature" button and agrees to the Terms of Service and electronic signature consent.
+Completion: Once submitted, the view switches to a read-only confirmation state.
+3.3. Post-Signing & Audit Trail
+Document Locking: The system generates a flattened, read-only PDF containing the placed signatures.
+Signature Certificate: A dedicated certificate page is appended to the PDF containing:
+Document Name, Document ID, and Page Count.
+Signer Details: Name, verified email, IP address, user agent, and location.
+Cryptographic checksums (original and final hash).
+Detailed UTC timestamped audit trail (Opened, Authenticated, Signed, Completed).
+Notifications: All parties receive an email containing a secure download link for the final flattened PDF + Certificate.
+Dashboard Tracking: Senders can view the signature status (Pending, Completed, Voided) in the doctracker-app dashboard. A new "Signatures" tab in the Analytics modal will list completed signers.
+4. Technical Implementation Guidelines (Ralph Loop Instructions)
+This section provides technical direction for the coding agent (Ralph) to execute the build.
+4.1. Database Schema Updates (Supabase)
+Create the following tables/relations:
+
+signature_requests: Links to documents. Tracks status (draft, sent, completed, voided).
+signers: Links to signature_requests. Stores email, role name, auth status, IP, user_agent, completed_at.
+signature_fields: Links to signers. Stores field type (signature, text, date), page number, x/y coordinates, width/height, and the submitted value (e.g., base64 image data for signatures).
+4.2. Frontend Components
+Template Builder (/app/d/[slug]/prepare): Implement a drag-and-drop interface over the existing react-pdf renderer. Use framer-motion or a standard HTML5 drag-and-drop library to place absolute-positioned signature blocks over the PDF pages. Save coordinates relative to page dimensions.
+Action Buttons: Update src/app/page.tsx to include the "eSign" button as a new column in the document list table, routing to the prepare flow.
+Signer Viewer (/app/d/[slug]/sign): Adapt viewer-client.tsx to render the assigned fields on top of the PDF based on the current user's email.
+Consolidated Signature Modal: Reuse the existing SignatureModal.tsx for capturing the base64 signature/typed text to populate the fields.
+4.3. Backend & PDF Processing
+PDF Generation API (/api/signatures/complete):
+Use pdf-lib (Node.js library) to load the original PDF buffer.
+Iterate over completed signature_fields and draw images/text at the recorded coordinates onto the respective pages.
+Generate a new PDF page for the Signature Certificate using pdf-lib text drawing utilities, appending it to the end of the document.
+Save the final buffer to Supabase Storage in a locked/read-only bucket.
+Email Service: Integrate with Resend or similar to dispatch "Signature Requested" and "Document Completed" emails with expiring secure links.
